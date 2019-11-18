@@ -1,0 +1,68 @@
+plugins {
+    id 'java'
+}
+
+group 'Beam'
+version '1.0-SNAPSHOT'
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+
+    maven {
+        url "http://packages.confluent.io/maven/"
+    }
+}
+
+dependencies {
+    testCompile group: 'junit', name: 'junit', version: '4.12'
+
+    compile group: 'org.apache.beam', name: 'beam-sdks-java-maven-archetypes-starter', version: '2.14.0'
+
+    // https://mvnrepository.com/artifact/com.google.auth/google-auth-library-oauth2-http
+    compile group: 'com.google.auth', name: 'google-auth-library-oauth2-http', version: '0.16.2'
+
+    // https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-google-cloud-platform
+    compile group: 'org.apache.beam', name: 'beam-sdks-java-io-google-cloud-platform', version: '2.14.0'
+
+    // https://mvnrepository.com/artifact/org.apache.beam/beam-runners-google-cloud-dataflow-java
+    compile group: 'org.apache.beam', name: 'beam-runners-google-cloud-dataflow-java', version: '2.14.0'
+
+    // https://mvnrepository.com/artifact/com.google.cloud/google-cloud-storage
+    compile group: 'com.google.cloud', name: 'google-cloud-storage', version: '1.86.0'
+
+    // https://mvnrepository.com/artifact/org.postgresql/postgresql
+    compile group: 'org.postgresql', name: 'postgresql', version: '42.2.5'
+
+    // https://mvnrepository.com/artifact/mysql/mysql-connector-java
+    compile group: 'mysql', name: 'mysql-connector-java', version: '8.0.15'
+
+    // https://mvnrepository.com/artifact/org.apache.avro/avro
+    compile group: 'org.apache.avro', name: 'avro', version: '1.9.1'
+
+
+    compile group: 'org.slf4j', name: 'slf4j-api', version: '1.7.25'
+    compile group: 'org.slf4j', name: 'slf4j-simple', version: '1.7.25'
+
+    // https://mvnrepository.com/artifact/com.squareup.okhttp3/okhttp
+    compile group: 'com.squareup.okhttp3', name: 'okhttp', version: '4.2.2'
+
+
+    // https://mvnrepository.com/artifact/org.apache.kafka/kafka-clients
+    compile group: 'org.apache.kafka', name: 'kafka-clients', version: '0.10.2.0'
+
+    // https://mvnrepository.com/artifact/io.confluent/kafka-schema-registry
+//    compile group: 'io.confluent', name: 'kafka-schema-registry', version: '4.1.0'
+
+    // https://mvnrepository.com/artifact/io.confluent/kafka-schema-registry-client
+    compile group: 'io.confluent', name: 'kafka-schema-registry-client', version: '4.1.0'
+
+    // https://mvnrepository.com/artifact/org.json/json
+    compile group: 'org.json', name: 'json', version: '20180813'
+
+    // https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-kafka
+    compile group: 'org.apache.beam', name: 'beam-sdks-java-io-kafka', version: '2.14.0'
+
+
+}
