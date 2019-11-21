@@ -5,20 +5,25 @@ import io.confluent.kafka.schemaregistry.client.SchemaMetadata;
 import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException;
 import org.apache.avro.Schema;
-import org.apache.avro.SchemaBuilder;
+import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericDatumWriter;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.io.BinaryEncoder;
 import org.apache.avro.io.EncoderFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.sql.ResultSet;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 import static com.beam.examples.DataflowPipeline.logger;
 
 enum Type {
-    RECORD, ENUM, ARRAY, MAP, UNION, FIXED, STRING, BYTES, INT, LONG, FLOAT, DOUBLE, BOOLEAN, NULL;
+    RECORD, ARRAY, MAP, UNION, FIXED, STRING, BYTES, INT, LONG, FLOAT, DOUBLE, BOOLEAN, NULL;
     private final String name;
 
     private Type() {
@@ -38,6 +43,7 @@ public class SchemaProvider {
 
         SchemaRegistryClient client = new CachedSchemaRegistryClient(kafkaSchemaRegistry, 100);
         Schema schema = null;
+        Schema typeSchema = null;
         try {
             SchemaMetadata metadata = client.getSchemaMetadata("order-value", 1);
             String schemaString = metadata.getSchema();
@@ -52,27 +58,23 @@ public class SchemaProvider {
             List<Schema.Field> generatedSchemaFields = new ArrayList<>();
             List<Schema.Field> schemaFields = schema.getFields();
 
-            Map<String, String> objectProperties = new HashMap<>();
 
-            Schema typeSchema = Schema.createRecord("consumer-schema","this is consumer schema", "record",false);
+            typeSchema = Schema.createRecord("ConsumerSchema", "this is consumer schema", "record", false);
             for (Schema.Field field : schemaFields) {
 
                 if (checkIfPrimitive(field.schema().getType())) {
-                    generatedSchemaFields.add(field);
-                    new Schema.Field(field.name(), field.schema(), null,null);
+                    Schema.Field typeField = new Schema.Field(field.name(), field.schema(), null, null);
+                    generatedSchemaFields.add(typeField);
                 } else {
-                    objectProperties.put(field.schema().getName(), Schema.Type.INT.getName());
+                    Schema.Field typeField = new Schema.Field(field.name(), Schema.create(Schema.Type.INT), null, null);
+                    generatedSchemaFields.add(typeField);
                 }
 
             }
 
-            schema = Schema.createRecord(generatedSchemaFields);
-            Set<String> keys = objectProperties.keySet();
-            for (String key : keys) {
-                schema.addProp(key, objectProperties.get(key));
-            }
+            typeSchema.setFields(generatedSchemaFields);
 
-            logger.info("[SchemaProvider] - Generated Schema from input schema is {}. \n This schema will be used for Generic Record creation.", schema);
+            logger.info("[SchemaProvider] - Generated Schema from input schema is {}. \n This schema will be used for Generic Record creation.", typeSchema);
 
         } catch (IOException e) {
             logger.error("[SchemaProvider] - Error while reading consumer schema from Registry. Exception Mesage {}", e.getMessage());
@@ -81,12 +83,12 @@ public class SchemaProvider {
             e.printStackTrace();
         }
 
-        return schema;
+        return typeSchema;
     }
 
     private static boolean checkIfPrimitive(Schema.Type type) {
         for (Type type1 : Type.values()) {
-            if (type1.getName().equals(type.getName())) {
+            if (type1.getName().equals(type.getName()) && !type.getName().equals(Type.RECORD.getName())) {
                 return true;
             }
         }
@@ -98,12 +100,13 @@ public class SchemaProvider {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try {
             Schema schema = new Schema.Parser().parse(tableSchema);
+
             List<Schema.Field> fields = schema.getFields();
-            GenericDatumWriter writer = new GenericDatumWriter(schema);
+            GenericDatumWriter writer = new GenericDatumWriter<GenericRecord>(schema);
             BinaryEncoder encoder = EncoderFactory.get().binaryEncoder(baos, null);
             logger.info("[SchemaProvider] - Generating Avro Record for SQL Resultset");
             while (resultSet.next()) {
-                Map<String, Object> record = new HashMap<>();
+                GenericRecord record = new GenericData.Record(schema);
                 for (Schema.Field field : fields) {
                     String fieldName = field.name();
                     logger.info(" Schema Type :--> {}", schema.getType().getName());
@@ -112,14 +115,22 @@ public class SchemaProvider {
                     Object value = null;
                     try {
                         value = resultSet.getObject(jdbcColumnName);
+                        if (value instanceof BigDecimal) {
+                            value = Double.valueOf(value.toString());
+                        }
                         record.put(fieldName, value);
                     } catch (Exception e) {
                         logger.error("[SchemaProvider] - Error while Traversing Schema fields for GenericRecord put. Exception : {}", e.getMessage());
                         e.printStackTrace();
                     }
                 }
-                writer.write(record, encoder);
+
+                logger.info("[SchemaProvider] - Generated Avro Generic record {}", record);
+                writer.write((Object) record, encoder);
+                encoder.flush();
+
             }
+            encoder.flush();
             logger.info("[SchemaProvider] - Successully Built Avro GenericRecord for Resultset");
 
         } catch (Exception e) {
