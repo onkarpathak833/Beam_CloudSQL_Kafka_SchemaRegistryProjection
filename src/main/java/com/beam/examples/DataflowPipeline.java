@@ -6,13 +6,12 @@ import com.beam.examples.util.QueryGenerator;
 import com.beam.examples.util.SchemaProvider;
 import com.google.auth.oauth2.GoogleCredentials;
 import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.runners.direct.DirectRunner;
 import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.coders.ByteArrayCoder;
-import org.apache.beam.sdk.coders.KvCoder;
-import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.io.kafka.KafkaIO;
+import org.apache.beam.sdk.coders.AvroCoder;
+import org.apache.beam.sdk.coders.ListCoder;
 import org.apache.beam.sdk.io.kafka.KafkaRecord;
 import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
@@ -21,11 +20,9 @@ import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.View;
-import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
-import org.apache.kafka.common.serialization.StringSerializer;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,10 +47,8 @@ public class DataflowPipeline {
         logger = LoggerFactory.getLogger("BeamJobLogger");
     }
 
-
     public static void main(String[] args) throws Exception {
         GoogleCredentials credentials = CredentialsManager.loadGoogleCredentials(GCP_API_KEY);
-
         Pipeline pipeline = createDataflowPipeline(args);
         MyPipelineOptions.MyCustomOptions options = (MyPipelineOptions.MyCustomOptions) pipeline.getOptions();
         String filePath = options.getConfigFilePath();
@@ -67,8 +62,9 @@ public class DataflowPipeline {
             e.printStackTrace();
         }
 
-        String kafkaTopic = properties.getProperty("KAFKA_TOPIC");
-        String bootStrapServer = properties.getProperty("KAFKA_BOOTSTRAP_SERVER");
+
+        String kafkaTopic = properties.getProperty(kafka_topic);
+        String bootStrapServer = properties.getProperty(kafka_bootstrap_server);
         PCollection<KafkaRecord<String, String>> kafkaData = dao.readFromKafkaTopic(pipeline, bootStrapServer, kafkaTopic);
 
         String kafkaSchemaRegistry = properties.getProperty(SCHEMA_REGISTRY_URL);
@@ -83,7 +79,6 @@ public class DataflowPipeline {
             public void processElement(ProcessContext processContext) {
                 KafkaRecord<String, String> record = processContext.element();
                 String kafkaSchemaRegistry = processContext.sideInput(view);
-//                System.out.println(" KAFKA Schema Registry URL : " + kafkaSchemaRegistry);
                 String message = record.getKV().getValue();
                 logger.info("[DataflowPipeline] - Kafka Message Consumed with Key {}", record.getKV().getKey());
                 logger.info("[DataflowPipeline] - Processing Kafka Records in ParDo for Schema registry");
@@ -93,10 +88,7 @@ public class DataflowPipeline {
             }
         }).withSideInputs(view));
 
-        Map<String, String> propertiesMap = new HashMap<>();
-        properties.keySet().stream().forEach(key -> {
-            propertiesMap.put(key.toString(), properties.getProperty(key.toString()));
-        });
+        Map<String, String> propertiesMap = getMapFromProperties(properties);
 
         PCollectionView<Map<String, String>> propertiesCollection = pipeline.apply(Create.of(propertiesMap)).apply(View.asMap());
 
@@ -107,7 +99,6 @@ public class DataflowPipeline {
                 Map<String, String> data = processContext.sideInput(propertiesCollection);
                 logger.info("[DataflowPipeline] - Generating Jdbc Query from Consumer Schema {}", schema);
                 String query = queryGenerator.generateQueryFromSchema(schema, properties);
-
                 System.out.println("Query Generated is : " + query);
                 List list = new ArrayList<String>();
                 list.add(0, query);
@@ -117,30 +108,34 @@ public class DataflowPipeline {
             }
         }).withSideInputs(propertiesCollection));
 
-
-        PCollection<KV<String, byte[]>> avroCollection = queryCollection.apply(ParDo.of(new DoFn<List<String>, KV<String, byte[]>>() {
+        queryCollection.apply(ParDo.of(new DoFn<List<String>, List<GenericRecord>>() {
             @ProcessElement
             public void processElement(ProcessContext processContext) {
                 List<String> inputs = processContext.element();
                 Map<String, String> properties = processContext.sideInput(propertiesCollection);
-                Properties props = new Properties();
+                String kafkaTopic = properties.get("TARGET_KAFKA_TOPIC");
                 String tableSchema = inputs.get(1);
                 logger.info("[DataflowPipeline] - Processing Jdbc Query and Schema in ParDo");
                 ResultSet resultSet = dao.readDataFromPostgreSQL(inputs.get(0));
-                byte[] record = schemaProvider.createGenericRecord(tableSchema, resultSet, properties);
-                System.out.println("Generated Avro Record : " + record);
-                processContext.output(KV.of(tableSchema, record));
+                List<GenericRecord> avroRecords = schemaProvider.createGenericRecord(tableSchema, resultSet, properties);
+                System.out.println("Generated Avro Record : " + avroRecords.size());
+                dao.publishToKafkaTopic(properties, avroRecords);
             }
-        }).withSideInputs(propertiesCollection)).setCoder(KvCoder.of(StringUtf8Coder.of(), ByteArrayCoder.of()));
+        }).withSideInputs(propertiesCollection)).setCoder(ListCoder.of(AvroCoder.of(globalSchema)));
 
         logger.info("[DataflowPipeline] - Write Avro Generic Records to Kafka Topic");
-        avroCollection.apply(KafkaIO.<String, byte[]>write().withTopic("avro")
-                .withBootstrapServers("localhost:9092")
-                .withKeySerializer(StringSerializer.class)
-                .withValueSerializer(ByteArraySerializer.class));
-
         pipeline.run().waitUntilFinish();
     }
+
+    @NotNull
+    private static Map<String, String> getMapFromProperties(Properties properties) {
+        Map<String, String> propertiesMap = new HashMap<>();
+        properties.keySet().stream().forEach(key -> {
+            propertiesMap.put(key.toString(), properties.getProperty(key.toString()));
+        });
+        return propertiesMap;
+    }
+
 
     private static Pipeline createDataflowPipeline(String[] args) {
 
